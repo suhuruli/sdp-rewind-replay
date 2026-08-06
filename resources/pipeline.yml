@@ -1,0 +1,26 @@
+resources:
+  pipelines:
+    payments_pipeline:
+      name: sdp-rewind-replay-payments
+      catalog: ${var.catalog}
+      schema: ${var.demo_schema}
+
+      # Time travel pins the pipeline to PREVIEW until CURRENT reaches DBR 18.3.
+      # Do not enable this on a production pipeline that cannot move channels.
+      channel: PREVIEW
+      serverless: true
+      photon: true
+      continuous: false
+
+      configuration:
+        # The prerequisite. The pipeline must also complete one update after this
+        # is set before any rewind point exists to rewind to.
+        pipelines.timeTravel.enabled: "true"
+        demo.catalog: ${var.catalog}
+        demo.schema: ${var.demo_schema}
+        # Flip to "true" to ship the cents-as-dollars bug, then redeploy.
+        demo.bug.enabled: "false"
+
+      libraries:
+        - notebook:
+            path: ../src/pipeline.py

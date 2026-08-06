@@ -1,28 +1,154 @@
-# REPO NAME 
+# SDP Rewind & Replay demo
+
+A payments pipeline that ships a one-line bug, inflates every settled amount by
+100x, and recovers with the Rewind API without a full refresh.
+
+Companion codebase for the Lakeflow SDP **Streaming Time Travel / Rewind API** Beta
+technical blog.
+
+## What gets deployed
+
+- **Pipeline** `sdp-rewind-replay-payments` — bronze → silver → gold, time travel enabled
+- **Job** `sdp-rewind-setup` — creates the catalog, schema, and landing table
+- **Job** `sdp-rewind-seed-stream` — seeds data every 5 min then runs the pipeline (paused on deploy)
+- **Dashboard** Payments — Settlement Monitor — settled dollars vs. transaction count
+
+## Quick start
+
+```bash
+databricks bundle deploy -p e2-dogfood
+databricks bundle run setup -p e2-dogfood
+
+# Seed a few batches at staggered lags so several windows close immediately.
+# Use `jobs run-now` with notebook_params, not `bundle run --params`: the tasks
+# use task-level base_parameters, so job-level params are rejected.
+SEED_JOB=$(databricks bundle summary -p e2-dogfood -o json \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['resources']['jobs']['seed_stream']['id'])")
+for lag in 60 45 30; do
+  databricks jobs run-now -p e2-dogfood --timeout 15m --json "{
+    \"job_id\": $SEED_JOB, \"only\": [\"seed\"],
+    \"notebook_params\": {\"lag_minutes\": \"$lag\"}}"
+done
+
+# First update. Also satisfies the second rewind prerequisite.
+databricks pipelines start-update <pipeline-id> --cause API_CALL -p e2-dogfood
+
+./scripts/verify.sh
+```
+
+Then unpause `sdp-rewind-seed-stream` so data keeps arriving and rewind points
+accumulate. Leave it running during a rewind: new data still landing while recovery
+happens is the point.
+
+## The demo
 
 ```
-Placeholder
-
-Fill here a description at a functional level - what is this content doing
+landing_payments      amount_minor = 7969  ← integer CENTS. That is $79.69.
+      |
+bronze_payments       ingest only, no logic
+      |
+silver_payments       amount_minor / 100   ← THE BUG LIVES HERE
+      |
+gold_merchant_5min    5-min tumbling window per merchant, 10-min watermark
 ```
 
-## Video Overview
+Set `demo.bug.enabled: "true"` in `resources/pipeline.yml` and redeploy: silver
+stops dividing by 100 and every amount is 100x too large. **The pipeline does not
+fail.** It reports COMPLETED and keeps producing wrong money, which is the entire
+reason this feature exists.
 
-Include a GIF overview of what your project does. Use a service like Quicktime, Zoom or Loom to create the video, then convert to a GIF.
+### The aha moment
 
+The dashboard plots settled dollars as bars against transaction count as a line. In
+normal operation they move together. Under the bug, dollars explode while the
+transaction line stays flat: **the same payments, valued wrong.** On a linear axis
+the spike flattens every healthy window into a baseline, so the chart itself visibly
+breaks.
 
-## Installation
+`avg_ticket` is the diagnostic column. A coffee shop at a $1,378 average ticket is
+not a volume anomaly, it is a units bug.
 
-Include details on how to use and install this content. 
+Measured, from a real run:
 
-## How to get help
+```
+window_start          txns  settled       avg_ticket
+2026-08-05T23:50:00    185     30400.83       164.33   ← healthy
+2026-08-06T04:20:00    282   4501753.00     15963.66   ← corrupt
+```
 
-Databricks support doesn't cover this content. For questions or bugs, please open a GitHub issue and the team will help on a best effort basis.
+Note `txns` is ordinary. Same transaction count as a healthy window, valued 100x
+wrong.
 
+### Recovery
 
-## License
+```bash
+./scripts/verify.sh                              # capture the "before"
+# set demo.bug.enabled back to "false" and redeploy:
+# rewind does NOT restore code
+./scripts/rewind.sh --dry-run "2026-08-06 17:37:00"
+./scripts/rewind.sh --replay  "2026-08-06 17:37:00"
+./scripts/verify.sh                              # all three checks must read 0
+```
 
-&copy; 2025 Databricks, Inc. All rights reserved. The source in this notebook is provided subject to the Databricks License [https://databricks.com/db-license-source].  All included or referenced third party libraries are subject to the licenses set forth below.
+Verified outcome: rows restored to the exact pre-incident baseline, **0** duplicate
+windows, **0** duplicate payment IDs. Exactly-once holding through a stateful
+aggregation across a rewind.
 
-| library                                | description             | license    | source                                              |
-|----------------------------------------|-------------------------|------------|-----------------------------------------------------|
+## Things that will bite you
+
+Full detail in [research/FINDINGS.md](research/FINDINGS.md).
+
+**Timestamp format.** `rewind_timestamp` needs `yyyy-MM-dd HH:mm:ss`, UTC,
+space-separated. ISO-8601 is rejected and the error misleadingly reports
+`BEYOND_RETENTION`, blaming Delta log cleanup. `rewind.sh` validates up front.
+
+**Name every affected dataset.** Automatic downstream cascade is documented but does
+not currently happen. Rewinding only silver leaves gold un-rewound; the next update
+fails with `DELTA_SOURCE_IGNORE_DELETE` and the pipeline is hard-blocked until a full
+refresh — the exact outcome the feature exists to avoid. `rewind.sh` names silver and
+gold explicitly, leaving bronze out so the source is never re-read.
+
+**Rewind does not restore code.** Deploy your fix yourself before replaying.
+
+**Rewind emits no events.** `DESCRIBE HISTORY` looking for `RESTORE` is the only way
+to confirm what moved. That is what `verify.sh` does.
+
+**A failed rewind is not a no-op.** It can write `RESTORE` commits before failing.
+
+**Dry run is weak.** No resolved rewind point returned, and it misses failures the
+real call hits.
+
+**Auto Loader blocks whole-pipeline rewind** with `CF_TIME_TRAVEL_ERROR`. This demo
+uses a Delta landing table deliberately.
+
+**Gold row counts freezing is normal.** A watermarked aggregation only emits when a
+window closes, so counts stall while the pipeline is healthy. Lower `lag_minutes` to
+close them. Do not read frozen counts as a broken rewind.
+
+**Warehouse choice.** `verify.sh` needs serverless or pro; a 2X-Small classic
+warehouse cannot parse `DESCRIBE HISTORY`.
+
+## Layout
+
+```
+databricks.yml              bundle definition, dogfood target
+src/pipeline.py             bronze → silver → gold, bug behind a config flag
+src/seed.py                 payment event generator
+src/setup.py                catalog, schema, landing table
+resources/pipeline.yml      pipeline with pipelines.timeTravel.enabled
+resources/jobs.yml          setup + seed_stream jobs
+resources/dashboard.yml     dashboard resource
+resources/dashboard.lvdash.json
+scripts/rewind.sh           rewind + replay, with format validation
+scripts/verify.sh           counts, Delta history, windows, correctness checks
+research/FINDINGS.md        verified Beta behaviors and gotchas
+```
+
+## Teardown
+
+```bash
+databricks bundle destroy -p e2-dogfood
+# Pipeline tables are not bundle-managed:
+#   DROP TABLE harsha_rewind_demo.payments.{bronze_payments,silver_payments,gold_merchant_5min}
+#   DROP TABLE harsha_rewind_demo.payments.landing_payments
+```

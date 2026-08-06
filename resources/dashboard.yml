@@ -1,0 +1,7 @@
+resources:
+  dashboards:
+    settlement_monitor:
+      display_name: Payments — Settlement Monitor
+      file_path: ./dashboard.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      parent_path: /Workspace/Users/${workspace.current_user.userName}/${bundle.name}

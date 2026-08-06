@@ -1,0 +1,538 @@
+{
+  "datasets": [
+    {
+      "name": "ds_gold",
+      "displayName": "Merchant 5-minute windows",
+      "queryLines": [
+        "SELECT window_start, window_end, merchant_id, merchant_name,\n",
+        "       total_amount, txn_count, max_amount, avg_ticket\n",
+        "FROM gold_merchant_5min\n",
+        "ORDER BY window_start"
+      ],
+      "columns": [
+        {
+          "displayName": "Settled Volume",
+          "description": "Total settled amount in dollars",
+          "expression": "SUM(`total_amount`)"
+        },
+        {
+          "displayName": "Transactions",
+          "description": "Count of approved authorizations",
+          "expression": "SUM(`txn_count`)"
+        },
+        {
+          "displayName": "Avg Ticket",
+          "description": "Settled volume divided by transaction count",
+          "expression": "SUM(`total_amount`) / SUM(`txn_count`)"
+        },
+        {
+          "displayName": "Largest Single Payment",
+          "description": "Biggest individual authorization in the window",
+          "expression": "MAX(`max_amount`)"
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "monitor",
+      "displayName": "Settlement Monitor",
+      "layout": [
+        {
+          "widget": {
+            "name": "header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Payments \u2014 Settlement Monitor\n",
+                "\n",
+                "Per-merchant settled volume in 5-minute windows, from `gold_merchant_5min`.\n",
+                "\n",
+                "**Read the two series together.** Bars are dollars, the line is transaction count. In normal operation they move together: more transactions, more money. When they diverge \u2014 dollars spike while the transaction line stays flat \u2014 the same payments are being valued wrong, and the problem is upstream in how amounts are converted, not in the volume of business."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-volume",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "measure(Settled Volume)",
+                      "expression": "MEASURE(`Settled Volume`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Settled Volume)",
+                  "displayName": "Settled Volume",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Settled Volume",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-txns",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "measure(Transactions)",
+                      "expression": "MEASURE(`Transactions`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Transactions)",
+                  "displayName": "Transactions"
+                }
+              },
+              "frame": {
+                "title": "Transactions",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-avg-ticket",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "measure(Avg Ticket)",
+                      "expression": "MEASURE(`Avg Ticket`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Avg Ticket)",
+                  "displayName": "Avg Ticket",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Avg Ticket \u2014 the tell",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-largest",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "measure(Largest Single Payment)",
+                      "expression": "MEASURE(`Largest Single Payment`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Largest Single Payment)",
+                  "displayName": "Largest Payment",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Largest Single Payment",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "volume-and-count",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "window_start",
+                      "expression": "`window_start`"
+                    },
+                    {
+                      "name": "sum(total_amount)",
+                      "expression": "SUM(`total_amount`)"
+                    },
+                    {
+                      "name": "sum(txn_count)",
+                      "expression": "SUM(`txn_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "window_start",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "5-minute window"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "sum(total_amount)",
+                        "displayName": "Settled $"
+                      }
+                    ]
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "sum(txn_count)",
+                        "displayName": "Transactions"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Settled dollars vs. transaction count \u2014 healthy series move together",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "avg-ticket-trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "window_start",
+                      "expression": "`window_start`"
+                    },
+                    {
+                      "name": "merchant_name",
+                      "expression": "`merchant_name`"
+                    },
+                    {
+                      "name": "avg(avg_ticket)",
+                      "expression": "AVG(`avg_ticket`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "window_start",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "5-minute window"
+                },
+                "y": {
+                  "fieldName": "avg(avg_ticket)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg ticket ($)"
+                },
+                "color": {
+                  "fieldName": "merchant_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Merchant"
+                }
+              },
+              "frame": {
+                "title": "Average ticket by merchant \u2014 a coffee shop does not sell $1,300 coffees",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "window-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gold",
+                  "fields": [
+                    {
+                      "name": "window_start",
+                      "expression": "`window_start`"
+                    },
+                    {
+                      "name": "merchant_name",
+                      "expression": "`merchant_name`"
+                    },
+                    {
+                      "name": "txn_count",
+                      "expression": "`txn_count`"
+                    },
+                    {
+                      "name": "total_amount",
+                      "expression": "`total_amount`"
+                    },
+                    {
+                      "name": "avg_ticket",
+                      "expression": "`avg_ticket`"
+                    },
+                    {
+                      "name": "max_amount",
+                      "expression": "`max_amount`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "window_start",
+                    "displayName": "Window",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "datetime"
+                  },
+                  {
+                    "fieldName": "merchant_name",
+                    "displayName": "Merchant",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "txn_count",
+                    "displayName": "Txns",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "integer"
+                  },
+                  {
+                    "fieldName": "total_amount",
+                    "displayName": "Settled $",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float",
+                    "numberFormat": "$0,0.00"
+                  },
+                  {
+                    "fieldName": "avg_ticket",
+                    "displayName": "Avg ticket",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float",
+                    "numberFormat": "$0,0.00"
+                  },
+                  {
+                    "fieldName": "max_amount",
+                    "displayName": "Largest",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float",
+                    "numberFormat": "$0,0.00"
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "frame": {
+                "title": "Window detail",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#FCFCFC",
+        "dark": "#1F272D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "fontColor": {
+        "light": "#11171C",
+        "dark": "#E8ECF0"
+      },
+      "selectionColor": {
+        "light": "#2272B4",
+        "dark": "#8ACAFF"
+      },
+      "visualizationColors": [
+        "#0072B2",
+        "#E69F00",
+        "#009E73",
+        "#CC79A7",
+        "#D55E00",
+        "#56B4E9",
+        "#F0E442"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

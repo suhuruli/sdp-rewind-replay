@@ -1,5 +1,4 @@
-*conf*.json
+.databricks/
 .DS_Store
-__pycache__
-.idea/
-.env
+__pycache__/
+*.pyc

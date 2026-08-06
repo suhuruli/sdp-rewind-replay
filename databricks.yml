@@ -1,0 +1,27 @@
+bundle:
+  name: sdp-rewind-replay-demo
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for the demo.
+    default: harsha_rewind_demo
+  demo_schema:
+    description: Schema holding the landing table and the three pipeline tables.
+    default: payments
+  warehouse_id:
+    description: >-
+      SQL warehouse backing the dashboard and the verify script. Must be
+      serverless or pro: a 2X-Small classic warehouse cannot parse
+      DESCRIBE HISTORY, which the verification queries rely on.
+    default: 864004c1b3961382
+
+include:
+  - resources/*.yml
+
+targets:
+  dogfood:
+    default: true
+    mode: development
+    workspace:
+      host: https://e2-dogfood.staging.cloud.databricks.com/
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
