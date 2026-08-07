@@ -147,6 +147,16 @@ if [[ -n "$DIRTY" ]]; then
   exit 1
 fi
 
+# The baseline must hold GOOD code. If a rehearsal's bug state ever gets
+# committed into it, --bug becomes a no-op, the "corrupt" update is actually
+# healthy, and the whole staging silently produces nothing to demo.
+if ! git show "$BASELINE_TAG:src/pipeline.py" | grep -q 'cast("double") / 100'; then
+  echo "ERROR: '$BASELINE_TAG' does not contain the correct amount conversion." >&2
+  echo "       The bug state was committed into the baseline, so --bug would be" >&2
+  echo "       a no-op. Restore the '/ 100' and move the tag before rehearsing." >&2
+  exit 1
+fi
+
 echo "git preflight OK. Resetting to '$BASELINE_TAG'."
 git reset --hard "$BASELINE_TAG" >/dev/null
 
