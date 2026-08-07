@@ -115,20 +115,26 @@ JSON
 )" > /dev/null
 }
 
-# The committed file must hold GOOD code, since the demo's fix is a plain
-# 'git checkout -- src/pipeline.py'. If the bug were ever committed, that fix
-# would restore the bug and the recovery would silently do nothing.
-if ! git show HEAD:src/pipeline.py | grep -q 'cast("double") / 100'; then
-  echo "ERROR: the committed src/pipeline.py is missing the '/ 100'." >&2
-  echo "       The bug got committed. Restore it before rehearsing:" >&2
-  echo "         ./scripts/deploy.sh --fix --no-run && git commit -am 'restore'" >&2
-  exit 1
-fi
-
 # ------------------------------------------------------------------ 1. good code
 
+# deploy.sh --fix rewrites the amount line in the working tree, so the baseline
+# is correct regardless of the state the last rehearsal left behind. It is not
+# read from git, which means a bug state accidentally committed at some point
+# cannot poison the healthy baseline.
 step "1/6  deploy good code"
 ./scripts/deploy.sh --fix --no-run
+
+# The demo's on-camera fix is 'git checkout -- src/pipeline.py', which only works
+# if the committed file is the good version. Warn, but do not block: the staging
+# itself is unaffected, since step 1 just rewrote the line directly.
+if ! git show HEAD:src/pipeline.py | grep -q 'cast("double") / 100'; then
+  echo
+  echo "WARNING: the COMMITTED src/pipeline.py is missing the '/ 100', so"
+  echo "  'git checkout -- src/pipeline.py' would restore the bug, not the fix."
+  echo "  Staging is fine. Before recording, commit the good version:"
+  echo "    git commit -am 'restore amount conversion'"
+  echo "  On camera, use './scripts/deploy.sh --fix' as the fix instead."
+fi
 
 # --------------------------------------------------------------- 2. healthy tail
 
