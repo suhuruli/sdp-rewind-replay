@@ -78,7 +78,7 @@ def silver_payments():
         .where(F.col("auth_result") == "approved")
         .withColumn("event_ts", F.to_timestamp("event_time"))
         # Amounts arrive as integer minor units: 7969 means $79.69.
-        .withColumn("amount", F.col("amount_minor").cast("double"))
+        .withColumn("amount", F.col("amount_minor").cast("double") / 100)
         .select(
             "payment_id",
             "merchant_id",
