@@ -8,8 +8,9 @@
 # stages an event; every artifact the demo points at is already real.
 #
 #   1. restore good code, deploy
-#   2. truncate landing, drop the pipeline tables, seed a contiguous healthy tail
-#   3. run -> the tail materializes healthy on empty tables and empty state
+#   2. empty landing, seed a contiguous healthy tail
+#   3. FULL REFRESH -> the tail materializes healthy, and checkpoints plus
+#      operator state are reset to match
 #   4. apply the bug, deploy
 #   5. seed the corrupt batch, plus a later batch to advance the watermark
 #   6. incremental update -> only the new rows go through the broken transform
@@ -131,15 +132,18 @@ step "1/6  deploy good code"
 
 # --------------------------------------------------------------- 2. healthy tail
 
-step "2/6  clear all tables, seed a contiguous healthy tail"
-sql "TRUNCATE TABLE $CATALOG.$SCHEMA.landing_payments"
-echo "  landing truncated"
-# Dropping the pipeline tables is what erases the previous rehearsal, and it
-# replaces a --full-refresh in step 3. SDP recreates them on the next update.
-for t in gold_merchant_5min silver_payments bronze_payments; do
-  sql "DROP TABLE IF EXISTS $CATALOG.$SCHEMA.$t"
-  echo "  dropped $t"
-done
+step "2/6  clear landing, seed a contiguous healthy tail"
+# DELETE, not TRUNCATE, and the pipeline tables are deliberately left alone.
+#
+# TRUNCATE gives landing a new Delta table id. Bronze's checkpoint still records
+# the old id, so the next incremental update dies with
+# DIFFERENT_DELTA_TABLE_READ_BY_STREAMING_SOURCE. Dropping the pipeline tables
+# does not save you either: it clears their checkpoints, so the following update
+# succeeds and the failure only surfaces one update later. DELETE keeps the table
+# identity and just removes rows, and the --full-refresh in step 3 resets the
+# checkpoints and operator state to match.
+sql "DELETE FROM $CATALOG.$SCHEMA.landing_payments"
+echo "  landing emptied"
 for b in "${HEALTHY_BATCHES[@]}"; do
   # shellcheck disable=SC2086
   seed $b "healthy"
@@ -147,12 +151,12 @@ done
 
 # --------------------------------------------------------------- 3. full refresh
 
-step "3/6  build the healthy baseline"
-# Cheaper than --full-refresh: the pipeline tables were already dropped in step
-# 2, so this is a first run over a small landing table rather than a teardown and
-# recompute of populated ones. Same clean result, including empty operator state.
+step "3/6  full refresh to build the healthy baseline"
+# --full-refresh is required, not just convenient. It is what resets the stream
+# checkpoints and operator state to match the emptied landing table. Skipping it
+# leaves bronze's checkpoint pointing at offsets that no longer exist.
 databricks pipelines start-update "$PIPELINE_ID" -p "$PROFILE" \
-  --cause API_CALL > /dev/null
+  --full-refresh --cause API_CALL > /dev/null
 wait_for_update "healthy update" || { echo "healthy update FAILED" >&2; exit 1; }
 
 LAST_GOOD_UTC=$(date -u +'%Y-%m-%d %H:%M:%S')
