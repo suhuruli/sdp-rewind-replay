@@ -2,3 +2,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Rehearsal ground truth written by scripts/reset.sh. Local only: the demo
+# rediscovers the boundary from Delta history rather than reading this.
+.demo-boundary
