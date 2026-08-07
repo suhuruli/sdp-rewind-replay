@@ -106,7 +106,11 @@ def make_event(event_time: datetime) -> Row:
             ["approved", "declined", "referred"], weights=[92, 7, 1]
         )[0],
         is_test=random.random() < 0.02,
-        event_time=event_time.isoformat(),
+        # Naive UTC, no offset suffix. With a '+00:00' offset, to_timestamp() in
+        # silver reinterprets the value into the session time zone and every
+        # event time silently shifts by the UTC offset, so gold windows no longer
+        # line up with the update timestamps the demo correlates against.
+        event_time=event_time.replace(tzinfo=None).isoformat(sep=" "),
     )
 
 
