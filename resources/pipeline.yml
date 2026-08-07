@@ -18,8 +18,6 @@ resources:
         pipelines.timeTravel.enabled: "true"
         demo.catalog: ${var.catalog}
         demo.schema: ${var.demo_schema}
-        # Flip to "true" to ship the cents-as-dollars bug, then redeploy.
-        demo.bug.enabled: "false"
 
       libraries:
         - notebook:

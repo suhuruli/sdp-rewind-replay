@@ -13,8 +13,8 @@
 # MAGIC                           merchant, 10-minute watermark.
 # MAGIC ```
 # MAGIC
-# MAGIC The only interesting line in this file is the `amount_minor / 100` in
-# MAGIC `silver_payments`. Removing it is the bug the demo recovers from.
+# MAGIC The only interesting line in this file is the `/ 100` on the `amount`
+# MAGIC column in `silver_payments`. Deleting it is the bug the demo recovers from.
 # MAGIC
 # MAGIC A Delta landing table is deliberate, not incidental: Auto Loader sources
 # MAGIC currently fail whole-pipeline rewind with
@@ -27,11 +27,6 @@ from pyspark.sql import functions as F
 
 CATALOG = spark.conf.get("demo.catalog")
 SCHEMA = spark.conf.get("demo.schema")
-
-# Set to "true" in the pipeline configuration to ship the cents-as-dollars bug.
-# Kept as a config flag so the whole scenario is scriptable; a real deploy would
-# be a code change, and the blog frames it that way.
-BUG_ENABLED = spark.conf.get("demo.bug.enabled", "false").lower() == "true"
 
 # COMMAND ----------
 # MAGIC %md
@@ -57,14 +52,18 @@ def bronze_payments():
 # MAGIC %md
 # MAGIC ## Silver: cleanse and normalize
 # MAGIC
-# MAGIC Drops test traffic and non-approved authorizations, parses event time, and
-# MAGIC converts cents to dollars.
+# MAGIC Four cleansing steps: drop test traffic, drop non-approved authorizations,
+# MAGIC parse event time, and convert the amount from integer cents to dollars.
 # MAGIC
-# MAGIC Note the buggy branch casts to `double` rather than leaving the column as
-# MAGIC `bigint`. A type change would be caught immediately by SDP
-# MAGIC (`CANNOT_UPDATE_TABLE_SCHEMA`) and the bad deploy would fail loudly, which
-# MAGIC is the opposite of the failure mode this demo is about. Holding the type
-# MAGIC steady is what lets the bug ship silently.
+# MAGIC The `/ 100` on the `amount` line is what the demo deletes. The cast to
+# MAGIC `double` stays, which is what makes the bad deploy survive: `amount` keeps
+# MAGIC its declared type, so SDP has nothing to reject and the update reports
+# MAGIC COMPLETED. Drop the cast as well and SDP fails the deploy immediately with
+# MAGIC `CANNOT_UPDATE_TABLE_SCHEMA`, because `amount` would turn from `double` into
+# MAGIC `bigint`.
+# MAGIC
+# MAGIC That contrast is the argument for the feature. SDP already catches bad
+# MAGIC deploys that change a schema. Rewind exists for the ones that do not.
 
 
 @dp.table(
@@ -73,18 +72,13 @@ def bronze_payments():
     table_properties={"quality": "silver"},
 )
 def silver_payments():
-    amount = (
-        F.col("amount_minor").cast("double")
-        if BUG_ENABLED
-        else F.col("amount_minor") / F.lit(100)
-    )
-
     return (
         spark.readStream.table("bronze_payments")
         .where(~F.coalesce(F.col("is_test"), F.lit(False)))
         .where(F.col("auth_result") == "approved")
         .withColumn("event_ts", F.to_timestamp("event_time"))
-        .withColumn("amount", amount)
+        # Amounts arrive as integer minor units: 7969 means $79.69.
+        .withColumn("amount", F.col("amount_minor").cast("double") / 100)
         .select(
             "payment_id",
             "merchant_id",
