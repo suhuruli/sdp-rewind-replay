@@ -11,9 +11,16 @@
 #   2. truncate landing, then seed a contiguous healthy tail
 #   3. FULL REFRESH with good code -> the whole tail materializes healthy, and
 #      operator state is cleared so no corrupt partial windows survive
-#   4. commit the bug, deploy
+#   4. apply the bug, deploy
 #   5. seed the corrupt batch, plus a later batch to advance the watermark
 #   6. incremental update -> only the new rows go through the broken transform
+#
+# The bug is an UNCOMMITTED edit to src/pipeline.py, so nothing here touches git
+# history. On camera it is a 'git diff': one line, one color, no history to
+# navigate. The fix is 'git checkout -- src/pipeline.py'. Committing the bug and
+# reverting it reads as slightly more realistic, but it means every rehearsal
+# leaves another commit behind and the script has to rewrite history to clean up.
+# Not worth the moving parts in a live demo.
 #
 # WHY LANDING IS TRUNCATED. Reusing whatever is already in landing is cheaper,
 # but event time then has a multi-hour hole between the last rehearsal and this
@@ -28,15 +35,6 @@
 # own windows. The second batch, seeded at a much smaller lag, drags the
 # watermark forward and closes the corrupt windows so the spike is visible. Skip
 # it and the corruption is real, is sitting in silver, and shows up nowhere.
-#
-# GIT SAFETY. Step 4 commits, and to stop local history growing a bug commit per
-# rehearsal this resets --hard to the demo-baseline tag first. That discards
-# commits, so it refuses unless all of the following hold:
-#   - the demo-baseline tag exists
-#   - HEAD is demo-baseline, or exactly one commit ahead of it
-#   - if ahead, that commit touches only src/pipeline.py
-#   - nothing uncommitted outside src/pipeline.py
-# The only thing it can then discard is a previous rehearsal's bug commit.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,7 +47,6 @@ SEED_JOB_ID="${SEED_JOB_ID:-972844999617450}"
 WAREHOUSE_ID="${WAREHOUSE_ID:-864004c1b3961382}"
 CATALOG="${CATALOG:-harsha_rewind_demo}"
 SCHEMA="${SCHEMA:-payments}"
-BASELINE_TAG="${BASELINE_TAG:-demo-baseline}"
 BOUNDARY_FILE="$REPO/.demo-boundary"
 
 # Healthy tail: three batches, each spreading 60 minutes of event time, at
@@ -115,50 +112,15 @@ JSON
 )" > /dev/null
 }
 
-# ---------------------------------------------------------------- git preflight
-
-if ! git rev-parse -q --verify "refs/tags/$BASELINE_TAG" >/dev/null; then
-  echo "ERROR: tag '$BASELINE_TAG' does not exist." >&2
-  echo "       Create it on the clean commit:  git tag $BASELINE_TAG" >&2
+# The committed file must hold GOOD code, since the demo's fix is a plain
+# 'git checkout -- src/pipeline.py'. If the bug were ever committed, that fix
+# would restore the bug and the recovery would silently do nothing.
+if ! git show HEAD:src/pipeline.py | grep -q 'cast("double") / 100'; then
+  echo "ERROR: the committed src/pipeline.py is missing the '/ 100'." >&2
+  echo "       The bug got committed. Restore it before rehearsing:" >&2
+  echo "         ./scripts/deploy.sh --fix --no-run && git commit -am 'restore'" >&2
   exit 1
 fi
-
-AHEAD=$(git rev-list --count "$BASELINE_TAG"..HEAD)
-if (( AHEAD > 1 )); then
-  echo "ERROR: HEAD is $AHEAD commits ahead of '$BASELINE_TAG'." >&2
-  echo "       Refusing to reset --hard; that would discard real work." >&2
-  echo "       Move the tag forward if those commits are meant to stay." >&2
-  exit 1
-fi
-
-if (( AHEAD == 1 )); then
-  TOUCHED=$(git diff --name-only "$BASELINE_TAG"..HEAD)
-  if [[ "$TOUCHED" != "src/pipeline.py" ]]; then
-    echo "ERROR: the commit above '$BASELINE_TAG' touches more than the pipeline:" >&2
-    echo "$TOUCHED" | sed 's/^/         /' >&2
-    exit 1
-  fi
-fi
-
-DIRTY=$(git status --porcelain | awk '{print $2}' | grep -v '^src/pipeline\.py$' || true)
-if [[ -n "$DIRTY" ]]; then
-  echo "ERROR: uncommitted changes outside src/pipeline.py:" >&2
-  echo "$DIRTY" | sed 's/^/         /' >&2
-  exit 1
-fi
-
-# The baseline must hold GOOD code. If a rehearsal's bug state ever gets
-# committed into it, --bug becomes a no-op, the "corrupt" update is actually
-# healthy, and the whole staging silently produces nothing to demo.
-if ! git show "$BASELINE_TAG:src/pipeline.py" | grep -q 'cast("double") / 100'; then
-  echo "ERROR: '$BASELINE_TAG' does not contain the correct amount conversion." >&2
-  echo "       The bug state was committed into the baseline, so --bug would be" >&2
-  echo "       a no-op. Restore the '/ 100' and move the tag before rehearsing." >&2
-  exit 1
-fi
-
-echo "git preflight OK. Resetting to '$BASELINE_TAG'."
-git reset --hard "$BASELINE_TAG" >/dev/null
 
 # ------------------------------------------------------------------ 1. good code
 
@@ -188,19 +150,8 @@ echo "last healthy update: $LAST_GOOD_UTC UTC"
 
 # ------------------------------------------------------------------ 4. ship bug
 
-step "4/6  commit and deploy the bug"
+step "4/6  apply and deploy the bug"
 ./scripts/deploy.sh --bug --no-run
-git add src/pipeline.py
-# Reads like ordinary housekeeping. That is why this class of bug ships at all.
-git commit -q -m "silver: simplify amount normalization
-
-Amount conversion was doing redundant arithmetic on a value the processor
-already normalizes. Dropping it.
-
-Co-authored-by: Isaac"
-BUG_COMMIT=$(git rev-parse --short HEAD)
-BUG_TIME_UTC=$(TZ=UTC git log -1 --date=iso-local --format=%ad)
-echo "bug commit $BUG_COMMIT at $BUG_TIME_UTC"
 
 # --------------------------------------------------------------- 5. corrupt tail
 
@@ -250,8 +201,6 @@ cat > "$BOUNDARY_FILE" <<EOF
 # it rediscovers the boundary from Delta history via scripts/rewind-points.sh.
 last_good_update_utc=$LAST_GOOD_UTC
 first_bad_update_utc=$FIRST_BAD_UTC
-bug_commit=$BUG_COMMIT
-bug_commit_utc=$BUG_TIME_UTC
 EOF
 
 step "ready to record"
@@ -260,5 +209,6 @@ echo
 echo "Rewind target: any timestamp between those two updates. Confirm with"
 echo "  ./scripts/rewind-points.sh"
 echo
-echo "The tree is on the bug commit, so 'git log' and 'git show' work on camera."
-echo "The fix is 'git revert $BUG_COMMIT'."
+echo "The bug is an uncommitted edit, so on camera:"
+echo "  git diff                        the one-line bug"
+echo "  git checkout -- src/pipeline.py  the fix"
