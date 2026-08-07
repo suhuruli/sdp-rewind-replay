@@ -8,10 +8,10 @@ technical blog.
 
 ## What gets deployed
 
-- **Pipeline** `sdp-rewind-replay-payments` — bronze → silver → gold, time travel enabled
-- **Job** `sdp-rewind-setup` — creates the catalog, schema, and landing table
-- **Job** `sdp-rewind-seed-stream` — seeds data every 5 min then runs the pipeline (paused on deploy)
-- **Dashboard** Payments — Settlement Monitor — settled dollars vs. transaction count
+- **Pipeline** `sdp-rewind-replay-payments`: bronze → silver → gold, time travel enabled
+- **Job** `sdp-rewind-setup` creates the catalog, schema, and landing table
+- **Job** `sdp-rewind-seed-stream` seeds data every 5 min then runs the pipeline (paused on deploy)
+- **Dashboard** Payments Settlement Monitor: settled dollars vs. transaction count
 
 ## Quick start
 
@@ -52,10 +52,28 @@ silver_payments       amount_minor / 100   ← THE BUG LIVES HERE
 gold_merchant_5min    5-min tumbling window per merchant, 10-min watermark
 ```
 
-Set `demo.bug.enabled: "true"` in `resources/pipeline.yml` and redeploy: silver
-stops dividing by 100 and every amount is 100x too large. **The pipeline does not
-fail.** It reports COMPLETED and keeps producing wrong money, which is the entire
-reason this feature exists.
+The bug is the deletion of `/ 100` from one line in `silver_payments`:
+
+```python
+# good
+.withColumn("amount", F.col("amount_minor").cast("double") / 100)
+# bad deploy
+.withColumn("amount", F.col("amount_minor").cast("double"))
+```
+
+Every amount becomes 100x too large. **The pipeline does not fail.** It reports
+COMPLETED and keeps producing wrong money, which is the entire reason this
+feature exists.
+
+The cast is what makes it survive. Keep it and `amount` stays a `double`, the
+schema is unchanged, and SDP has nothing to object to. Drop the cast too and the
+column becomes `bigint`, so SDP rejects the deploy immediately with
+`CANNOT_UPDATE_TABLE_SCHEMA`. That contrast is the argument for the feature: SDP
+already catches bad deploys that change a schema, and rewind is for the ones it
+cannot see.
+
+`./scripts/reset.sh` stages the whole scenario, so the corruption is already
+visible before you start. Roughly 3 minutes.
 
 ### The aha moment
 
@@ -81,13 +99,41 @@ wrong.
 
 ### Recovery
 
+Fix the code first. Rewind restores data, never code, so replaying against the
+bug just recreates the corruption.
+
 ```bash
-./scripts/verify.sh                              # capture the "before"
-# set demo.bug.enabled back to "false" and redeploy:
-# rewind does NOT restore code
-./scripts/rewind.sh --dry-run "2026-08-06 17:37:00"
-./scripts/rewind.sh --replay  "2026-08-06 17:37:00"
-./scripts/verify.sh                              # all three checks must read 0
+git checkout -- src/pipeline.py    # the fix
+databricks bundle deploy -p e2-dogfood
+```
+
+Then get the rewind command, with a real timestamp already filled in:
+
+```bash
+./scripts/rewind-points.sh
+```
+
+It prints the call for you to run by hand rather than wrapping it, because the
+API call is the thing worth reading:
+
+```bash
+databricks pipelines start-update <pipeline-id> -p e2-dogfood --json '{
+  "cause": "API_CALL",
+  "rewind_spec": {
+    "rewind_timestamp": "2026-08-07 12:38:20",
+    "datasets": [
+      { "identifier": "harsha_rewind_demo.payments.silver_payments" },
+      { "identifier": "harsha_rewind_demo.payments.gold_merchant_5min" }
+    ]
+  }
+}'
+```
+
+Replay is an ordinary update, with no special flags:
+
+```bash
+databricks pipelines start-update <pipeline-id> -p e2-dogfood
+./scripts/verify.sh    # all three correctness checks must read 0
 ```
 
 Verified outcome: rows restored to the exact pre-incident baseline, **0** duplicate
@@ -100,13 +146,18 @@ Full detail in [research/FINDINGS.md](research/FINDINGS.md).
 
 **Timestamp format.** `rewind_timestamp` needs `yyyy-MM-dd HH:mm:ss`, UTC,
 space-separated. ISO-8601 is rejected and the error misleadingly reports
-`BEYOND_RETENTION`, blaming Delta log cleanup. `rewind.sh` validates up front.
+`BEYOND_RETENTION`, blaming Delta log cleanup.
+
+**Timestamps need converting.** `DESCRIBE HISTORY` returns commit times in the
+warehouse's local zone, while `rewind_timestamp` is read as UTC. Pasting straight
+out of history rewinds to the wrong moment, potentially hours off, with no error.
+`rewind-points.sh` converts for you.
 
 **Name every affected dataset.** Automatic downstream cascade is documented but does
 not currently happen. Rewinding only silver leaves gold un-rewound; the next update
 fails with `DELTA_SOURCE_IGNORE_DELETE` and the pipeline is hard-blocked until a full
-refresh — the exact outcome the feature exists to avoid. `rewind.sh` names silver and
-gold explicitly, leaving bronze out so the source is never re-read.
+refresh, the exact outcome the feature exists to avoid. Name silver and gold, and
+leave bronze out so the source is never re-read.
 
 **Rewind does not restore code.** Deploy your fix yourself before replaying.
 
@@ -139,7 +190,9 @@ resources/pipeline.yml      pipeline with pipelines.timeTravel.enabled
 resources/jobs.yml          setup + seed_stream jobs
 resources/dashboard.yml     dashboard resource
 resources/dashboard.lvdash.json
-scripts/rewind.sh           rewind + replay, with format validation
+scripts/reset.sh            stage the scenario: healthy history, then corruption
+scripts/deploy.sh           --bug / --fix the one line, deploy, run
+scripts/rewind-points.sh    print the rewind command with a UTC timestamp
 scripts/verify.sh           counts, Delta history, windows, correctness checks
 research/FINDINGS.md        verified Beta behaviors and gotchas
 ```
