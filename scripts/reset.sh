@@ -8,9 +8,8 @@
 # stages an event; every artifact the demo points at is already real.
 #
 #   1. restore good code, deploy
-#   2. truncate landing, then seed a contiguous healthy tail
-#   3. FULL REFRESH with good code -> the whole tail materializes healthy, and
-#      operator state is cleared so no corrupt partial windows survive
+#   2. truncate landing, drop the pipeline tables, seed a contiguous healthy tail
+#   3. run -> the tail materializes healthy on empty tables and empty state
 #   4. apply the bug, deploy
 #   5. seed the corrupt batch, plus a later batch to advance the watermark
 #   6. incremental update -> only the new rows go through the broken transform
@@ -22,11 +21,12 @@
 # leaves another commit behind and the script has to rewrite history to clean up.
 # Not worth the moving parts in a live demo.
 #
-# WHY LANDING IS TRUNCATED. Reusing whatever is already in landing is cheaper,
-# but event time then has a multi-hour hole between the last rehearsal and this
-# one, which shows up on the dashboard as disconnected islands. Truncating and
-# seeding a fresh contiguous window makes every rehearsal identical and gives the
-# clean "long flat stretch, then a cliff" shape the demo is built around.
+# WHY EVERYTHING IS CLEARED. Reusing what is already in landing is cheaper, but
+# event time then has a multi-hour hole between the last rehearsal and this one,
+# and rows landing behind an already-advanced watermark are dropped by the
+# aggregation entirely: the bug stays real in silver and shows up nowhere. A
+# fresh contiguous window makes every rehearsal identical and gives the clean
+# "long flat stretch, then a cliff" shape the demo is built around.
 #
 # WHY THE CORRUPT TAIL NEEDS TWO BATCHES. Gold emits a window only once the
 # watermark passes the window's end, and the watermark trails the largest event
@@ -49,14 +49,16 @@ CATALOG="${CATALOG:-harsha_rewind_demo}"
 SCHEMA="${SCHEMA:-payments}"
 BOUNDARY_FILE="$REPO/.demo-boundary"
 
-# Healthy tail: three batches, each spreading 60 minutes of event time, at
-# descending lag so they abut. Covers a contiguous 3 hours ending 90 minutes ago.
-HEALTHY_BATCHES=("210 60 600" "150 60 600" "90 60 600")   # lag spread events
+# Healthy tail: two batches spreading 60 minutes of event time each, at
+# descending lag so they abut. A contiguous 2 hours ending 90 minutes ago, which
+# is 24 five-minute windows across 6 merchants. Enough for the chart to read as a
+# long flat baseline; more events only make the rebuild slower.
+HEALTHY_BATCHES=("210 60 300" "150 60 300")   # lag spread events
 
 # Corrupt batch, then the watermark advancer. The advancer's own windows stay
 # open, so it adds no second spike.
-CORRUPT_BATCH="60 25 500"
-ADVANCE_BATCH="10 5 120"
+CORRUPT_BATCH="60 25 250"
+ADVANCE_BATCH="10 5 60"
 
 step() { echo; echo "=============== $* ==============="; }
 
@@ -129,9 +131,15 @@ step "1/6  deploy good code"
 
 # --------------------------------------------------------------- 2. healthy tail
 
-step "2/6  truncate landing, seed a contiguous healthy tail"
+step "2/6  clear all tables, seed a contiguous healthy tail"
 sql "TRUNCATE TABLE $CATALOG.$SCHEMA.landing_payments"
 echo "  landing truncated"
+# Dropping the pipeline tables is what erases the previous rehearsal, and it
+# replaces a --full-refresh in step 3. SDP recreates them on the next update.
+for t in gold_merchant_5min silver_payments bronze_payments; do
+  sql "DROP TABLE IF EXISTS $CATALOG.$SCHEMA.$t"
+  echo "  dropped $t"
+done
 for b in "${HEALTHY_BATCHES[@]}"; do
   # shellcheck disable=SC2086
   seed $b "healthy"
@@ -139,11 +147,13 @@ done
 
 # --------------------------------------------------------------- 3. full refresh
 
-step "3/6  full refresh with good code"
-echo "Rebuilds bronze/silver/gold from landing and clears operator state."
+step "3/6  build the healthy baseline"
+# Cheaper than --full-refresh: the pipeline tables were already dropped in step
+# 2, so this is a first run over a small landing table rather than a teardown and
+# recompute of populated ones. Same clean result, including empty operator state.
 databricks pipelines start-update "$PIPELINE_ID" -p "$PROFILE" \
-  --full-refresh --cause API_CALL > /dev/null
-wait_for_update "full refresh" || { echo "full refresh FAILED" >&2; exit 1; }
+  --cause API_CALL > /dev/null
+wait_for_update "healthy update" || { echo "healthy update FAILED" >&2; exit 1; }
 
 LAST_GOOD_UTC=$(date -u +'%Y-%m-%d %H:%M:%S')
 echo "last healthy update: $LAST_GOOD_UTC UTC"
