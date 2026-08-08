@@ -1,4 +1,5 @@
 # Databricks notebook source
+
 # MAGIC %md
 # MAGIC # Payment authorization pipeline
 # MAGIC
@@ -13,8 +14,8 @@
 # MAGIC                           merchant, 10-minute watermark.
 # MAGIC ```
 # MAGIC
-# MAGIC The only interesting line in this file is the `/ 100` on the `amount`
-# MAGIC column in `silver_payments`. Deleting it is the bug the demo recovers from.
+# MAGIC The only interesting line in this file is the divisor on the `amount`
+# MAGIC column in `silver_payments`. Changing it is the bug the demo recovers from.
 # MAGIC
 # MAGIC A Delta landing table is deliberate, not incidental: Auto Loader sources
 # MAGIC currently fail whole-pipeline rewind with
@@ -27,13 +28,20 @@ from pyspark.sql import functions as F
 
 CATALOG = spark.conf.get("demo.catalog")
 SCHEMA = spark.conf.get("demo.schema")
+# The seeder writes this same table; the name comes from one DAB variable so the
+# two cannot drift apart. Defaulted so the notebook still runs if the config key
+# is missing, e.g. attached to a pipeline deployed before the variable existed.
+LANDING = spark.conf.get("demo.landing_table", "landing_payments")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Bronze: ingest, unmodified
 # MAGIC
 # MAGIC No business logic lives here. That is the point: a bug in cleansing must
 # MAGIC never require re-reading the source, which is what the scoped rewind shows.
+
+# COMMAND ----------
 
 
 @dp.table(
@@ -42,28 +50,35 @@ SCHEMA = spark.conf.get("demo.schema")
     table_properties={"quality": "bronze"},
 )
 def bronze_payments():
-    return (
-        spark.readStream.table(f"{CATALOG}.{SCHEMA}.landing_payments")
-        .withColumn("_ingested_at", F.current_timestamp())
-    )
+    # A straight passthrough, deliberately. Adding even a timestamp here would
+    # imply bronze does work, and the demo's whole claim is that it does not need
+    # to be re-read to recover.
+    return spark.readStream.table(f"{CATALOG}.{SCHEMA}.{LANDING}")
 
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Silver: cleanse and normalize
 # MAGIC
 # MAGIC Four cleansing steps: drop test traffic, drop non-approved authorizations,
 # MAGIC parse event time, and convert the amount from integer cents to dollars.
 # MAGIC
-# MAGIC The `/ 100` on the `amount` line is what the demo deletes. The cast to
-# MAGIC `double` stays, which is what makes the bad deploy survive: `amount` keeps
-# MAGIC its declared type, so SDP has nothing to reject and the update reports
-# MAGIC COMPLETED. Drop the cast as well and SDP fails the deploy immediately with
-# MAGIC `CANNOT_UPDATE_TABLE_SCHEMA`, because `amount` would turn from `double` into
-# MAGIC `bigint`.
+# MAGIC The divisor on the `amount` line is what the demo changes: `/ 100` becomes
+# MAGIC `/ 10`, so every amount comes out 10x too large. The cast to `double` stays,
+# MAGIC which is what makes the bad deploy survive: `amount` keeps its declared
+# MAGIC type, so SDP has nothing to reject and the update reports COMPLETED. Drop
+# MAGIC the cast as well and SDP fails the deploy immediately with
+# MAGIC `CANNOT_UPDATE_TABLE_SCHEMA`, because `amount` would turn from `double`
+# MAGIC into `bigint`.
 # MAGIC
 # MAGIC That contrast is the argument for the feature. SDP already catches bad
 # MAGIC deploys that change a schema. Rewind exists for the ones that do not.
+# MAGIC
+# MAGIC A wrong divisor is also a more honest bug than a deleted one: the line
+# MAGIC still reads like a unit conversion, so it survives code review.
+
+# COMMAND ----------
 
 
 @dp.table(
@@ -78,22 +93,28 @@ def silver_payments():
         .where(F.col("auth_result") == "approved")
         .withColumn("event_ts", F.to_timestamp("event_time"))
         # Amounts arrive as integer minor units: 7969 means $79.69.
+        #
+        # THE DEMO SWITCH. Exactly one of these two lines is active.
+        #   / 100  correct: cents to dollars
+        #   / 10   the bug: every amount comes out 10x too large
+        # To fix on camera, swap which line is commented and redeploy.
         .withColumn("amount", F.col("amount_minor").cast("double") / 100)
+        # .withColumn("amount", F.col("amount_minor").cast("double") / 10)
+        # Only what gold and the dashboard actually read. The landing table still
+        # carries currency, card network and category, as a real processor feed
+        # would; silver drops them so the one column that matters is obvious.
         .select(
             "payment_id",
             "merchant_id",
             "merchant_name",
-            "merchant_category",
             "amount",
-            "currency",
-            "card_network",
             "event_ts",
-            "_ingested_at",
         )
     )
 
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Gold: stateful 5-minute windowed totals
 # MAGIC
@@ -104,6 +125,8 @@ def silver_payments():
 # MAGIC
 # MAGIC That is the part a table RESTORE cannot put back, and the reason rewinding
 # MAGIC data alone is not enough.
+
+# COMMAND ----------
 
 
 @dp.table(

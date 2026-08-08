@@ -8,6 +8,13 @@ variables:
   demo_schema:
     description: Schema holding the landing table and the three pipeline tables.
     default: payments
+  landing_table:
+    description: >-
+      Name of the landing table, unqualified. This is the contract between the
+      seeder and the pipeline: scripts/feed.py writes it, src/setup.py creates
+      it, and src/pipeline.py reads it as a streaming source. Centralized here
+      so those three cannot drift apart.
+    default: landing_payments
   warehouse_id:
     description: >-
       SQL warehouse backing the dashboard and the verify script. Must be
@@ -15,13 +22,37 @@ variables:
       DESCRIBE HISTORY, which the verification queries rely on.
     default: 864004c1b3961382
 
+# NOTE: resources/dashboard.lvdash.json does NOT participate in these variables.
+# DAB does not substitute ${var.*} inside a .lvdash.json, so its query carries a
+# fully-qualified `harsha_rewind_demo.payments.gold_merchant_5min` literal.
+# Changing `catalog` or `demo_schema` above will silently break the dashboard
+# until that JSON is edited to match. Accepted deliberately: the alternative is a
+# pre-deploy rewrite step, which is more machinery than a demo needs.
+
 include:
   - resources/*.yml
 
 targets:
   dogfood:
     default: true
-    mode: development
+    # NOT `mode: development`, deliberately, even though these presets reproduce
+    # what dev mode would have set. Dev mode implies
+    # `trigger_pause_status: PAUSED`, and that preset silently strips
+    # `continuous: true` off a pipeline: DABs reads "paused" as "must not run on
+    # its own" and forces triggered mode. Validate still passes, so the pipeline
+    # quietly deploys as triggered with no warning. Overriding the preset back to
+    # UNPAUSED under dev mode is rejected outright ("target with 'mode:
+    # development' cannot set trigger pause status to UNPAUSED by default"), so
+    # the presets are spelled out here instead.
+    #
+    # seed_stream stays paused regardless: it declares pause_status on its own
+    # schedule, and an explicit resource value overrides a preset.
+    presets:
+      name_prefix: "[dev ${workspace.current_user.short_name}] "
+      pipelines_development: true
+      jobs_max_concurrent_runs: 4
+      tags:
+        dev: ${workspace.current_user.short_name}
     workspace:
       host: https://e2-dogfood.staging.cloud.databricks.com/
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
