@@ -4,7 +4,8 @@ A payments pipeline that ships a one-line bug, inflates every settled amount by
 10x, and recovers with the Rewind API without a full refresh.
 
 Companion codebase for the Lakeflow SDP **Streaming Time Travel / Rewind API** Beta
-technical blog.
+technical blog. This README is a high-level overview of the project. The steps and
+tooling for running the demo are shared separately.
 
 ## What gets deployed
 
@@ -14,44 +15,6 @@ technical blog.
 - **Dashboard** Payments Settlement Monitor: settled dollars vs. transaction count
 
 Seeding is not a job. It is `scripts/feed.py`, run from the laptop.
-
-## Quick start
-
-```bash
-databricks bundle deploy -p e2-dogfood
-databricks bundle run setup -p e2-dogfood
-```
-
-Deploying starts the pipeline: continuous mode runs itself, and no job triggers
-updates any more. Then feed it. `feed.py` empties the landing table first, so a
-full refresh is needed to bring the pipeline's checkpoints back in line with the
-emptied source:
-
-```bash
-./scripts/feed.py &          # 30 min of data, a batch every 30s, then stops
-databricks pipelines start-update <pipeline-id> --full-refresh-all \
-  --cause API_CALL -p e2-dogfood
-```
-
-The feed prints that exact command, with the pipeline id filled in, right after it
-clears the table. Leave the feed running during a rewind: new data still landing
-while recovery happens is the point.
-
-The first batch is deliberately heavy, spanning an hour of event time, then halves
-each batch until it reaches the steady 2.5 minutes. A steady-state batch is
-narrower than one gold window and the watermark trails by 10 minutes, so without
-the ramp the dashboard sits empty for the first three minutes. Priming closes
-about ten windows on the very first batch instead. `--prime 0` turns it off.
-
-Configuration lives in `databricks.yml` (catalog, schema, landing table,
-warehouse) and the scripts read it from there. There are no flags to override it:
-the bundle is the single source of truth, so change it there.
-
-Stop the pipeline when you are done, or it bills serverless indefinitely:
-
-```bash
-databricks pipelines stop <pipeline-id> -p e2-dogfood
-```
 
 ## The demo
 
@@ -89,12 +52,6 @@ column becomes `bigint`, so SDP rejects the deploy immediately with
 already catches bad deploys that change a schema, and rewind is for the ones it
 cannot see.
 
-To stage it: run `./scripts/feed.py` to build a healthy baseline, then swap which
-`amount` line is commented in `src/pipeline.py`, redeploy, and let the feed keep
-running. The corrupt windows appear within a minute or two. Because the pipeline
-is continuous and the feed advances event time on its own, nothing has to be
-triggered by hand.
-
 ### The aha moment
 
 The dashboard plots settled dollars as bars against transaction count as a line. In
@@ -121,52 +78,15 @@ magnitude, not the shape.
 ### Recovery
 
 Fix the code first. Rewind restores data, never code, so replaying against the
-bug just recreates the corruption.
+bug just recreates the corruption. Once the fix is redeployed, rewind to a UTC
+boundary just before the corruption and replay. On a continuous pipeline replay
+is an ordinary update that resumes on its own.
 
-Swap which `amount` line is commented in `src/pipeline.py`, then:
-
-```bash
-databricks bundle deploy -p e2-dogfood
-```
-
-Then rewind. `./scripts/rewind.py --mark` prints a UTC boundary timestamp to use,
-and `./scripts/rewind.py --at '<ts>'` validates the boundary, issues the rewind,
-and verifies what moved:
-
-```bash
-./scripts/rewind.py --mark                     # a timestamp to rewind to
-./scripts/rewind.py --at '2026-08-07 12:38:20' # rewind, then verify
-```
-
-Underneath it is this call, which is the thing worth reading:
-
-```bash
-databricks pipelines start-update <pipeline-id> -p e2-dogfood --json '{
-  "cause": "API_CALL",
-  "rewind_spec": {
-    "rewind_timestamp": "2026-08-07 12:38:20",
-    "datasets": [
-      { "identifier": "harsha_rewind_demo.payments.silver_payments" },
-      { "identifier": "harsha_rewind_demo.payments.gold_merchant_5min" }
-    ]
-  }
-}'
-```
-
-Replay is an ordinary update, with no special flags. On a continuous pipeline it
-resumes on its own; `--replay` runs it explicitly and re-checks correctness:
-
-```bash
-./scripts/rewind.py --at '<ts>' --replay   # all three checks must read 0
-```
-
-Verified outcome: rows restored to the exact pre-incident baseline, **0** duplicate
-windows, **0** duplicate payment IDs. Exactly-once holding through a stateful
-aggregation across a rewind.
+The verified outcome: rows restored to the exact pre-incident baseline, **0**
+duplicate windows, **0** duplicate payment IDs. Exactly-once holding through a
+stateful aggregation across a rewind.
 
 ## Things that will bite you
-
-Full detail in [research/FINDINGS.md](research/FINDINGS.md).
 
 **Timestamp format.** `rewind_timestamp` needs `yyyy-MM-dd HH:mm:ss`, UTC,
 space-separated. ISO-8601 is rejected and the error misleadingly reports
@@ -175,19 +95,18 @@ space-separated. ISO-8601 is rejected and the error misleadingly reports
 **Timestamps need converting.** `DESCRIBE HISTORY` returns commit times in the
 warehouse's local zone, while `rewind_timestamp` is read as UTC. Pasting straight
 out of history rewinds to the wrong moment, potentially hours off, with no error.
-`rewind.py` converts for you.
 
 **Name every affected dataset; do not trust `cascade: true`.** Automatic downstream
 cascade is documented but does not currently happen. Rewinding only silver leaves
 gold un-rewound; the next update fails with `DELTA_SOURCE_IGNORE_DELETE` and the
 pipeline is hard-blocked until a full refresh, the exact outcome the feature exists
-to avoid. `rewind.py` therefore always names silver and gold explicitly, and leaves
-bronze out so the source is never re-read.
+to avoid. Name silver and gold explicitly, and leave bronze out so the source is
+never re-read.
 
 **Rewind does not restore code.** Deploy your fix yourself before replaying.
 
 **Rewind emits no events.** `DESCRIBE HISTORY` looking for `RESTORE` is the only way
-to confirm what moved. That is what `rewind.py` does after every rewind.
+to confirm what moved.
 
 **A failed rewind is not a no-op.** It can write `RESTORE` commits before failing.
 
@@ -198,10 +117,10 @@ real call hits.
 uses a Delta landing table deliberately.
 
 **Gold row counts freezing is normal.** A watermarked aggregation only emits when a
-window closes, so counts stall while the pipeline is healthy. A smaller `--spread`
-in feed.py closes them sooner. Do not read frozen counts as a broken rewind.
+window closes, so counts stall while the pipeline is healthy. Do not read frozen
+counts as a broken rewind.
 
-**Warehouse choice.** `rewind.py` needs serverless or pro; a 2X-Small classic
+**Warehouse choice.** Verification needs serverless or pro; a 2X-Small classic
 warehouse cannot parse `DESCRIBE HISTORY`.
 
 ## Layout
@@ -217,18 +136,8 @@ resources/dashboard.lvdash.json
 scripts/feed.py             the seeder: clears landing, then feeds events
 scripts/rewind.py           rewind to a timestamp, verify, optionally replay
 scripts/_config.py          reads demo config out of the bundle
-research/FINDINGS.md        verified Beta behaviors and gotchas
 ```
 
 `resources/dashboard.lvdash.json` hardcodes the fully-qualified gold table:
 DAB does not substitute `${var.*}` inside a `.lvdash.json`, so changing `catalog`
 or `demo_schema` means editing that file too. Noted in `databricks.yml`.
-
-## Teardown
-
-```bash
-databricks bundle destroy -p e2-dogfood
-# Pipeline tables are not bundle-managed:
-#   DROP TABLE harsha_rewind_demo.payments.{bronze_payments,silver_payments,gold_merchant_5min}
-#   DROP TABLE harsha_rewind_demo.payments.landing_payments
-```
