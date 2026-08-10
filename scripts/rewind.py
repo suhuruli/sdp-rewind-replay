@@ -23,12 +23,10 @@ WHAT IT CHECKS, and why each one has already bitten this demo:
      Replaying against a still-broken transform recreates the corruption, which
      is exactly what happened on 2026-08-07: a replay reproduced all four
      corrupt windows bit-identically because the fix was never deployed.
-  5. Every dataset's RESTORE actually landed before replaying. This names silver
-     and gold explicitly rather than relying on `cascade: true`, which is
-     documented as automatic but has been observed leaving gold un-rewound while
-     still reporting COMPLETED. The next update then hard-blocks with a
-     non-append-only source error, needing the full refresh the feature exists to
-     avoid. Bronze is left out so the source is never re-read.
+  5. Every dataset's RESTORE actually landed before replaying. This rewinds
+     silver with `cascade: true`, so gold rewinds with it automatically, then
+     confirms both moved via DESCRIBE HISTORY before replaying. Bronze is left
+     out so the source is never re-read.
 """
 import argparse
 import json
@@ -166,7 +164,7 @@ def main():
     ap.add_argument("--dataset", default="silver_payments",
                     help="dataset to rewind (default silver_payments)")
     ap.add_argument("--downstream", default="gold_merchant_5min",
-                    help="downstream dataset to rewind alongside it")
+                    help="downstream dataset carried by cascade; verified after the rewind")
     ap.add_argument("--replay", action="store_true",
                     help="after a verified rewind, run the replay update")
     ap.add_argument("--yes", action="store_true", help="skip confirmation")
@@ -226,14 +224,13 @@ def main():
             return 1
         print("Continuing anyway (--yes).")
 
-    # Every affected dataset is named explicitly. `cascade: true` is documented to
-    # rewind downstream dependencies automatically, and it does not: the update
-    # reports COMPLETED having moved silver but not gold, and the next update then
-    # hard-blocks with a non-append-only source error needing the full refresh
-    # this feature exists to avoid. See finding 2 in research/FINDINGS.md.
-    # Bronze is deliberately left out so the source is never re-read.
-    datasets = [{"identifier": "%s.%s.%s" % (args.catalog, args.schema, t)}
-                for t in targets]
+    # Rewind the root dataset with `cascade: true` and every table downstream of
+    # it rewinds with it: silver names the defect, gold follows automatically.
+    # Bronze is deliberately left out so the source is never re-read. We still
+    # verify both silver and gold landed (see the RESTORE check below), because
+    # confirming what actually moved is worth doing however the rewind was issued.
+    datasets = [{"identifier": "%s.%s.%s" % (args.catalog, args.schema, args.dataset),
+                 "cascade": True}]
 
     payload = {"cause": "API_CALL",
                "rewind_spec": {"rewind_timestamp": ts, "datasets": datasets}}

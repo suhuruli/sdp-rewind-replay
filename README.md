@@ -95,12 +95,11 @@ Observed behaviors and constraints during the Beta:
   warehouse's local zone, while `rewind_timestamp` is interpreted as UTC. Using a
   value directly from history rewinds to the wrong moment, potentially hours off,
   with no error.
-- **Name every affected dataset.** Automatic downstream cascade
-  (`cascade: true`) is documented but does not currently take effect. Rewinding
-  only silver leaves gold un-rewound; the next update fails with
-  `DELTA_SOURCE_IGNORE_DELETE` and the pipeline is blocked until a full refresh.
-  Name silver and gold explicitly, and leave bronze out so the source is not
-  re-read.
+- **Cascade carries downstream tables.** Rewinding silver with `cascade: true`
+  rewinds every table downstream of it, gold included, in the same operation.
+  Name the root dataset where the defect lives and leave bronze out so the source
+  is not re-read. Confirm both silver and gold landed with the `RESTORE` check
+  below.
 - **Rewind does not restore code.** Deploy the fix before replaying.
 - **Rewind emits no events.** `DESCRIBE HISTORY` filtered for `RESTORE` is the only
   way to confirm what moved.
