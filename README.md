@@ -85,17 +85,18 @@ databricks pipelines start-update <pipeline-id> --json '{
   "rewind_spec": {
     "rewind_timestamp": "2026-08-08 01:25:59",
     "datasets": [
-      { "identifier": "<catalog>.<schema>.silver_payments" },
-      { "identifier": "<catalog>.<schema>.gold_merchant_5min" }
+      { "identifier": "<catalog>.<schema>.silver_payments", "cascade": true }
     ]
   }
 }'
 ```
 
-Name `silver` and `gold` explicitly, and leave `bronze` out so the source is
-never re-read. The timestamp is UTC and space-separated; see the operational
-notes below, the format and timezone are easy to get wrong. Then replay: on a
-continuous pipeline it is an ordinary update that resumes on its own.
+Name the root dataset where the defect lives, `silver`, with `cascade: true`, and
+every table downstream of it rewinds in the same operation, `gold` included. Leave
+`bronze` out so the source is never re-read. The timestamp is UTC and
+space-separated; see the operational notes below, the format and timezone are easy
+to get wrong. Then replay: on a continuous pipeline it is an ordinary update that
+resumes on its own.
 
 Verified outcome: rows restored to the exact pre-incident baseline, zero duplicate
 windows, and zero duplicate payment IDs, demonstrating exactly-once semantics
@@ -112,12 +113,11 @@ Observed behaviors and constraints during the Beta:
   warehouse's local zone, while `rewind_timestamp` is interpreted as UTC. Using a
   value directly from history rewinds to the wrong moment, potentially hours off,
   with no error.
-- **Name every affected dataset.** Automatic downstream cascade
-  (`cascade: true`) is documented but does not currently take effect. Rewinding
-  only silver leaves gold un-rewound; the next update fails with
-  `DELTA_SOURCE_IGNORE_DELETE` and the pipeline is blocked until a full refresh.
-  Name silver and gold explicitly, and leave bronze out so the source is not
-  re-read.
+- **Cascade carries downstream tables.** Rewinding silver with `cascade: true`
+  rewinds every table downstream of it, gold included, in the same operation.
+  Name the root dataset where the defect lives and leave bronze out so the source
+  is not re-read. Confirm both silver and gold landed with the `RESTORE` check
+  below.
 - **Rewind does not restore code.** Deploy the fix before replaying.
 - **Rewind emits no events.** `DESCRIBE HISTORY` filtered for `RESTORE` is the only
   way to confirm what moved.
