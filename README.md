@@ -77,8 +77,25 @@ the magnitude, not the shape.
 
 Deploy the corrected code first. Rewind restores data, not code, so replaying
 against the defective logic only reproduces the corruption. Once the fix is
-deployed, rewind to a UTC boundary immediately before the corruption and replay.
-On a continuous pipeline, replay is an ordinary update that resumes on its own.
+deployed, rewind to a UTC boundary immediately before the corruption:
+
+```bash
+databricks pipelines start-update <pipeline-id> --json '{
+  "cause": "API_CALL",
+  "rewind_spec": {
+    "rewind_timestamp": "2026-08-08 01:25:59",
+    "datasets": [
+      { "identifier": "<catalog>.<schema>.silver_payments" },
+      { "identifier": "<catalog>.<schema>.gold_merchant_5min" }
+    ]
+  }
+}'
+```
+
+Name `silver` and `gold` explicitly, and leave `bronze` out so the source is
+never re-read. The timestamp is UTC and space-separated; see the operational
+notes below, the format and timezone are easy to get wrong. Then replay: on a
+continuous pipeline it is an ordinary update that resumes on its own.
 
 Verified outcome: rows restored to the exact pre-incident baseline, zero duplicate
 windows, and zero duplicate payment IDs, demonstrating exactly-once semantics
@@ -126,7 +143,6 @@ resources/jobs.yml          setup job (seeding is a script, not a job)
 resources/dashboard.yml     dashboard resource
 resources/dashboard.lvdash.json
 scripts/feed.py             the seeder: clears landing, then feeds events
-scripts/rewind.py           rewind to a timestamp, verify, optionally replay
 scripts/_config.py          reads demo config from the bundle
 ```
 

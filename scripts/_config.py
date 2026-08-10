@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Read demo configuration out of the bundle instead of hardcoding it.
 
-feed.py and rewind.py both need the same catalog, schema, landing table,
-warehouse, and pipeline id. Those already live in databricks.yml or are produced
-by deploying it, so duplicating them as script defaults just gave them somewhere
-to rot: the pipeline id in particular changes whenever the pipeline is recreated,
-and a stale one sends a rewind at the wrong pipeline.
+feed.py needs the catalog, schema, landing table, warehouse, and pipeline id.
+Those already live in databricks.yml or are produced by deploying it, so
+duplicating them as script defaults just gave them somewhere to rot: the pipeline
+id in particular changes whenever the pipeline is recreated, and a stale one sends
+an update at the wrong pipeline.
 
 databricks.yml is the single source of truth and the scripts take no flags to
 override it. To point the demo somewhere else, edit the variable.
