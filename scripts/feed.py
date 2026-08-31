@@ -105,7 +105,7 @@ def sql(statement, profile, warehouse_id):
         ["databricks", "api", "post", "/api/2.0/sql/statements",
          "-p", profile, "--json", body, "-o", "json"],
         capture_output=True, text=True,
-        env={**os.environ, "DATABRICKS_AUTH_TYPE": "pat"},
+        env={**os.environ},
     )
     if p.returncode != 0:
         raise RuntimeError("CLI failed: %s" % (p.stderr or p.stdout)[:500])

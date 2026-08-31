@@ -4,10 +4,10 @@ bundle:
 variables:
   catalog:
     description: Unity Catalog catalog for the demo.
-    default: harsha_rewind_demo
+    default: workspace
   demo_schema:
     description: Schema holding the landing table and the three pipeline tables.
-    default: payments
+    default: sudhanva_rewind_replay
   landing_table:
     description: >-
       Name of the landing table, unqualified. This is the contract between the
@@ -20,11 +20,11 @@ variables:
       SQL warehouse backing the dashboard and the verify script. Must be
       serverless or pro: a 2X-Small classic warehouse cannot parse
       DESCRIBE HISTORY, which the verification queries rely on.
-    default: 864004c1b3961382
+    default: dd43ee29fedd958d
 
 # NOTE: resources/dashboard.lvdash.json does NOT participate in these variables.
 # DAB does not substitute ${var.*} inside a .lvdash.json, so its query carries a
-# fully-qualified `harsha_rewind_demo.payments.gold_merchant_5min` literal.
+# fully-qualified `workspace.sudhanva_rewind_replay.gold_merchant_5min` literal.
 # Changing `catalog` or `demo_schema` above will silently break the dashboard
 # until that JSON is edited to match. Accepted deliberately: the alternative is a
 # pre-deploy rewrite step, which is more machinery than a demo needs.

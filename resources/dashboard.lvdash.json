@@ -6,7 +6,7 @@
       "queryLines": [
         "SELECT window_start, window_end, merchant_id, merchant_name,\n",
         "       total_amount, txn_count, max_amount, avg_ticket\n",
-        "FROM harsha_rewind_demo.payments.gold_merchant_5min\n",
+        "FROM workspace.sudhanva_rewind_replay.gold_merchant_5min\n",
         "ORDER BY window_start"
       ],
       "columns": [

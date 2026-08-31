@@ -1,0 +1,37 @@
+# Deploy the Databricks Asset Bundle to e2-dogfood on every push to main
+# (including merges) and on manual run.
+#
+# Required GitHub secret:
+#   DATABRICKS_TOKEN  workspace PAT for the identity that should own the deploy
+# Optional GitHub variable:
+#   DATABRICKS_HOST   defaults to the host already in databricks.yml
+name: Deploy bundle
+
+concurrency:
+  group: deploy-dogfood
+  cancel-in-progress: false
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to dogfood
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST || 'https://e2-dogfood.staging.cloud.databricks.com' }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate --target dogfood
+
+      - name: Deploy bundle
+        run: databricks bundle deploy --target dogfood

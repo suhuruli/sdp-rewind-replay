@@ -27,7 +27,7 @@ def _bundle(subcommand, profile):
     p = subprocess.run(
         ["databricks", "bundle", subcommand, "-p", profile, "-o", "json"],
         capture_output=True, text=True, cwd=REPO,
-        env={**os.environ, "DATABRICKS_AUTH_TYPE": "pat"},
+        env={**os.environ},
     )
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout).strip()[:300])
