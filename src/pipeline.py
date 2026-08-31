@@ -101,8 +101,8 @@ def silver_payments():
         #   / 100  correct: cents to dollars
         #   / 10   the bug: every amount comes out 10x too large
         # To fix on camera, swap which line is commented and redeploy.
-        # .withColumn("amount", F.col("amount_minor").cast("double") / 100)
-        .withColumn("amount", F.col("amount_minor").cast("double") / 10)
+        .withColumn("amount", F.col("amount_minor").cast("double") / 100)
+        # .withColumn("amount", F.col("amount_minor").cast("double") / 10)
         # Only what gold and the dashboard actually read. The landing table still
         # carries currency, card network and category, as a real processor feed
         # would; silver drops them so the one column that matters is obvious.
