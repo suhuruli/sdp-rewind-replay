@@ -9,7 +9,7 @@ tooling for running the demo are provided separately.
 
 ## What gets deployed
 
-- **Pipeline** `sdp-rewind-replay-payments`: bronze → silver → gold, time travel
+- **Pipeline** `sdp-rewind-replay-payments`: bronze → silver → gold, Rewind Beta
   enabled, running continuous
 - **Job** `sdp-rewind-setup` creates the catalog, schema, and landing table
 - **Dashboard** Payments Settlement Monitor: settled dollars vs. transaction count
@@ -138,7 +138,7 @@ Observed behaviors and constraints during the Beta:
 databricks.yml              bundle definition, dogfood target, demo variables
 src/pipeline.py             bronze → silver → gold, the defect is one commented line
 src/setup.py                catalog, schema, landing table
-resources/pipeline.yml      pipeline with pipelines.timeTravel.enabled, continuous
+resources/pipeline.yml      pipeline with pipelines.rewind.betaEnabled, continuous
 resources/jobs.yml          setup job (seeding is a script, not a job)
 resources/dashboard.yml     dashboard resource
 resources/dashboard.lvdash.json
