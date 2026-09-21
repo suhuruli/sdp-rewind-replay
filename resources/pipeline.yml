@@ -15,7 +15,7 @@ resources:
       configuration:
         # The prerequisite. The pipeline must also complete one update after this
         # is set before any rewind point exists to rewind to.
-        pipelines.timeTravel.enabled: "true"
+        pipelines.rewind.betaEnabled: "true"
         demo.catalog: ${var.catalog}
         demo.schema: ${var.demo_schema}
         demo.landing_table: ${var.landing_table}
